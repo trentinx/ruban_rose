@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pinkribbon"
+version = "0.1.0"
+description = "Pink Ribbon project lib"
+readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent"
+]
+requires-python = ">=3.12"
+dependencies = [
+    "keras==3.10.0",
+    "optuna==4.4.0",
+    "pillow==11.3.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
