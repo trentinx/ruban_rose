@@ -1,174 +1,137 @@
-
-from PIL import Image
-from io import BytesIO
+from .images import MedImage, clahe, random_transformations
 from keras.utils import Sequence
-
 import numpy as np
-import os
-import zipfile
+
 
 class DataGenerator(Sequence):
-    """
-    A Keras data generator for loading breast cancer histopathology images from a zip file.
+    _batch_size = 4
+    dim = (50,50)
+    n_channels = 3
     
-    This class extends Keras Sequence to provide efficient batch loading of IDC (Invasive Ductal Carcinoma)
-    images for binary classification. It supports balanced sampling from both classes (0: non-IDC, 1: IDC)
-    and handles data loading directly from a zip archive.
+    def __init__(self, zip_path):
+        super().__init__()
+        self.zip_path = zip_path 
+        self.indexes = []
+        self.__load_data()
     
-    Attributes:
-        zip_path (str): Path to the zip file containing the dataset
-        rate (float): Fraction of the dataset to use (default: 0.1)
-        batch_size (int): Number of samples per batch (default: 4)
-        shuffle (bool): Whether to shuffle data after each epoch (default: True)
-        n_classes (int): Number of classes (fixed to 2 for binary classification)
-        dim (tuple): Image dimensions (50, 50)
-        n_channels (int): Number of color channels (3 for RGB)
-        transform: Optional image transformation function
-    """
-    def __init__(self, zip_path, rate=0.1, batch_size=4, shuffle=True):
-        """
-        Initialize the DataGenerator.
-        
-        Args:
-            zip_path (str): Path to the zip file containing IDC images
-            rate (float, optional): Fraction of dataset to use. Defaults to 0.1
-            batch_size (int, optional): Number of samples per batch. Defaults to 4
-            shuffle (bool, optional): Whether to shuffle data after each epoch. Defaults to True
-        
-        Note:
-            The zip file should contain images with paths starting with "IDC_regular_ps50_idx5"
-            and organized in directories named "0" (non-IDC) and "1" (IDC) for labeling.
-        """
-        self.zip_path = zip_path
-        self.zfile = zipfile.ZipFile(zip_path, 'r')        
-        
-        # Liste des noms de fichiers des images
-        self.img_ids = np.array([f for f in self.zfile.namelist() if f.startswith("IDC_regular_ps50_idx5") and f.lower().endswith(('.png'))])
-
-        # Liste des labels (même index que la liste des fichiers
-        self.labels = np.array([int(os.path.dirname(f).split('/')[-1]) for f in self.img_ids])
-        
-        # Liste des indexes par classe
-        self.label_ids = []
-        for i in range(2):
-            self.label_ids.append(np.where(self.labels==i)[0])
-        
-        self.rate = rate
-        self.batch_size = batch_size
-        self.shuffle = shuffle
-        self.n_classes = 2
-        self.dim = (50,50)
-        self.n_channels = 3
-        self.transform = False
-   
-        self.on_epoch_end()
-
-    def on_epoch_end(self):
-        """
-        Update indexes after each epoch.
-        
-        Resets and optionally shuffles the indexes for each class to ensure
-        different sampling order in the next epoch if shuffle is enabled.
-        """
-        #Réinitialisation de la liste d'indexes
-        self.indexes = [] 
-        for i in range(self.n_classes):
-            self.indexes.append(self.label_ids[i])
-            if self.shuffle == True:
-                np.random.shuffle(self.indexes[i]) 
-
     def __len__(self):
-        """
-        Denote the number of batches per epoch.
-        
-        Returns:
-            int: Number of batches per epoch, calculated to ensure balanced sampling
-                 and even number of batches for proper class distribution
-        """
-        return 2*(int(np.floor(len(self.img_ids) * self.rate / self.batch_size))//2)
+        return 4 * self.half_len // self.batch_size
 
     def __getitem__(self, index):
-        """
-        Generate one batch of data.
-        
-        Args:
-            index (int): Batch index
-            
-        Returns:
-            tuple: A tuple containing:
-                - X (numpy.ndarray): Batch of images with shape (batch_size, 50, 50, 3)
-                - y (numpy.ndarray): Batch of labels with shape (batch_size,)
-                
-        Note:
-            Ensures balanced sampling by taking equal numbers of samples from each class.
-            Handles index overflow by reshuffling when necessary.
-        """
-        # Generate indexes of the batch
         indexes = []
-        batch_size = self.batch_size//2
-        for i in range(self.n_classes):
-            try:
-                indexes += (self.indexes[i][index*batch_size:(index+1)*batch_size]).tolist()
-            except IndexError:
-                self.indexes[i] = self.label_ids[i]
-                if self.shuffle == True:
-                    np.random.shuffle(self.indexes[i])
-                indexes += (self.indexes[i][index*batch_size:(index+1)*batch_size]).tolist()
-
+        start = index * self._batch_size
+        end =  (index + 1 ) * self._batch_size
+        for ids in self.indexes:
+           indexes += (ids[start:end]).tolist()
+        np.random.shuffle(indexes)
         # Generate data
         X, y = self.__data_generation(indexes)
         return X, y
 
+    def on_epoch_end(self):
+        #Re-init indexes list
+        for indexes_list in self.indexes:   
+            np.random.shuffle(indexes_list)
+
+    def __load_data(self):
+        self.data = []
+        MedImage.open_zfile(self.zip_path)
+        self.data = np.array([MedImage(f) for  f in MedImage.zfile.namelist() if not f.startswith("IDC_regular_ps50_idx5") and f.lower().endswith(('.png'))])
+        self.indexes.append(np.where([obj.label == 0 for obj in self.data])[0])
+        self.indexes.append(np.where([obj.label == 1 for obj in self.data])[0])
+        self.half_len = max([len(l) for l in self.indexes])
+
+
+    def __find_minority_class(self):
+        minority = None
+        ratio = len(self.indexes[0])/len(self.indexes[1])
+        if ratio < 1:
+            minority = 0
+        elif ratio > 1:
+            minority = 1
+        else:
+            print("Classes are already balanced")
+        return minority
+
+    def balance(self):
+        minority = self.__find_minority_class() 
+        if minority is not None:
+            balanced_indexes = []
+            for i in range(2):
+                if minority == i:
+                    balanced_indexes.append([])
+                    length = len(self.indexes[i])
+                    while length < self.half_len:
+                        balanced_indexes[i] += self.indexes[i][:min(length, self.half_len - length)].tolist()
+                        length = len(balanced_indexes[i])
+                    balanced_indexes[i] = np.array(balanced_indexes[i])
+                else:
+                    balanced_indexes.append(self.indexes[i])
+            self.indexes = balanced_indexes
+                   
+    @property 
+    def batch_size(self):
+        return 2 * self._batch_size
+         
+    @batch_size.setter
+    def batch_size(self, value):
+        if value % 2 > 0:
+            print(f"batch_size parameter must be odd, keeping curren value {self.batch_size}.")
+        else:
+            self._batch_size = value // 2
+
+    def sample(self, size, reverse=False, shuffle=False):
+        indexes = []
+        if isinstance(size, int):
+            output_size = min(size // 2, self.half_len)
+        elif isinstance(size, float):
+            output_size = int(size*self.half_len)
+        else:
+            return None
+        for labels in self.indexes:
+            indexes.append(self.__sample_label(labels,output_size, reverse, shuffle))
+        output = DataGenerator(self.zip_path)
+        output.indexes = indexes
+        output.half_len = output_size
+        return output
+
+    def __sample_label(self, labels, size, reverse, shuffle):
+        output = labels
+        if shuffle:
+            np.random.shuffle(output)
+        if reverse:
+            output = output[::-1]
+        return output[:min(size,len(output))]
+
+    def load_img(self, img_id):
+        data = self.data[img_id]
+        y = data.label
+        X = data.resized(self.dim)
+        return X,y
+        
     def __data_generation(self, indexes):
-        """
-        Generate data containing batch_size samples.
-        
-        Args:
-            indexes (list): List of sample indexes to load
-            
-        Returns:
-            tuple: A tuple containing:
-                - X (numpy.ndarray): Batch of images with shape (batch_size, 50, 50, 3)
-                - y (numpy.ndarray): Batch of labels with shape (batch_size,)
-        """
         # Initialization
-        X = np.empty((self.batch_size, *self.dim, self.n_channels))
+        X = np.empty((self.batch_size, *self.dim, self.n_channels),dtype=np.uint8)
         y = np.empty((self.batch_size), dtype=int)
-        
         # Generate data
         for i, img_id in enumerate(indexes):
+
+            # Get image in array format and label
+            img, label = self.load_img(img_id)
+            
+            # Transform / augment data
+            img = random_transformations(img)
+            img = clahe(img)
+            
             # Store sample
-            X[i,], y[i] = self.load_img(img_id, as_array=True)
+            X[i,], y[i] = img, label
+
+        # Normalizarion
+        X = X / 255.
+            
         return X, y
-            
 
-    def load_img(self, img_id, as_array=False):
-        """
-        Load an image and its label from the zip file.
+            
+__all__ = ["DataGenerator"]   
         
-        Args:
-            img_id (int): Index of the image to load
-            as_array (bool, optional): Whether to return image as numpy array. Defaults to False
-            
-        Returns:
-            tuple: A tuple containing:
-                - image (PIL.Image or numpy.ndarray): The loaded image
-                - label_name (int): The class label (0 or 1)
-                
-        Note:
-            Images are converted to RGB format and optionally transformed if transform is set.
-        """
-        image_path = self.img_ids[img_id]
-        label_name = self.labels[img_id]
-        # Charger l'image directement depuis le zip
-        with self.zfile.open(image_path) as img_file:
-            image = Image.open(BytesIO(img_file.read())).convert("RGB")
-
-        if self.transform:
-            image = self.transform(image)
-            
-        if as_array:
-            image = np.array(image)        
-        return image, label_name
-    
-    
+        
