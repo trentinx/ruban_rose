@@ -1,136 +1,123 @@
-from .images import MedImage, clahe, random_transformations
+from PIL import Image, ImageOps, ImageEnhance
+from keras.applications.resnet50 import preprocess_input
 from keras.utils import Sequence
+from sklearn.model_selection import train_test_split
+import io
 import numpy as np
+import random
+import zipfile
 
 
 class DataGenerator(Sequence):
-    _batch_size = 4
-    dim = (50,50)
-    n_channels = 3
+    zipfile = None
+
     
-    def __init__(self, zip_path):
+    def __init__(self, zip_path=None, transform=None, max_samples_per_class=None, seed=None, experimentation="resnet50_1"):
         super().__init__()
-        self.zip_path = zip_path 
-        self.indexes = []
-        self.__load_data()
+        self.transform = transform
+        self.samples = []
+        if zip_path is not None:
+            self.open_zfile(zip_path)
+        self.shuffle = False    
+        self.batch_size = 8
+        self.transform = False
+        self.experimentation = experimentation
+        
+        self.load_img = {"resnet50_1": self.load_img_1,
+                         "resnet50_2": self.load_img_2,
+                         "resnet50_3": self.load_img_3,
+                         "resnet50_5": self.load_img_2
+        }
+                         
+        
+        file_list = np.array([f for f in DataGenerator.zfile.namelist() if not f.startswith("IDC_regular_ps50_idx5") and f.lower().endswith('.png')], dtype=object)
     
+        labels =  np.array([int(f.split('/')[-2]) for f in file_list ],dtype=int)
+
+        for i in range(2):
+            indexes = np.where(labels==i)[0].tolist()
+            samples = [(f, i) for f in file_list[indexes]]
+            if max_samples_per_class is not None:
+                samples = samples[:max_samples_per_class]
+            self.samples += samples
+    
+        if seed is not None:
+            np.random.seed(seed=42)
+        np.random.shuffle(self.samples)
+        
+    @classmethod
+    def open_zfile(cls, zpath):
+        DataGenerator.zfile = zipfile.ZipFile(zpath, 'r')
+
     def __len__(self):
-        return 4 * self.half_len // self.batch_size
+        return len(self.samples) // self.batch_size
 
-    def __getitem__(self, index):
-        indexes = []
-        start = index * self._batch_size
-        end =  (index + 1 ) * self._batch_size
-        for ids in self.indexes:
-           indexes += (ids[start:end]).tolist()
-        np.random.shuffle(indexes)
-        # Generate data
-        X, y = self.__data_generation(indexes)
-        return X, y
+    def load_img_1(self, path):
+        image_bytes = self.zfile.read(path)
+        l,a,b = Image.open(io.BytesIO(image_bytes))\
+                   .resize((50,50),resample = Image.BICUBIC)\
+                   .convert("LAB")\
+                   .split()
 
+        l = ImageOps.equalize(l)
+        img = Image.merge('LAB', (l, a, b))\
+                   .convert("RGB")
+
+        return np.array(img)/255.
+    
+    def load_img_2(self, path):
+        image_bytes = self.zfile.read(path)
+        img = Image.open(io.BytesIO(image_bytes))\
+                   .resize((224,224),resample = Image.BICUBIC)\
+                   .convert("RGB")
+        img = np.expand_dims(img, axis=0)
+        img = preprocess_input(img)
+        img = np.squeeze(img, axis=0)
+        return img
+    
+    def load_img_3(self, path):
+        image_bytes = self.zfile.read(path)
+        l,a,b = Image.open(io.BytesIO(image_bytes))\
+                   .resize((224,224),resample = Image.BICUBIC)\
+                   .convert("LAB") \
+                   .split()
+
+        l = ImageOps.equalize(l)
+        img = Image.merge('LAB', (l, a, b))\
+                   .convert("RGB")
+        img = np.expand_dims(img, axis=0)
+        img = preprocess_input(img)
+        img = np.squeeze(img, axis=0)
+        return img
+        
+        
+    def __getitem__(self, idx):
+        start = idx * self.batch_size
+        end =  (idx + 1 ) * self.batch_size
+        samples = self.samples[start:end]
+        X = np.stack([self.load_img[self.experimentation](s[0]) for s in samples]).astype(np.float16)
+        y = np.array([s[1] for s in samples], dtype=np.uint8)
+        return X,y
+    
     def on_epoch_end(self):
         #Re-init indexes list
-        for indexes_list in self.indexes:   
-            np.random.shuffle(indexes_list)
+        if self.shuffle:   
+            np.random.shuffle(self.samples)
+    
 
-    def __load_data(self):
-        self.data = []
-        MedImage.open_zfile(self.zip_path)
-        self.data = np.array([MedImage(f) for  f in MedImage.zfile.namelist() if not f.startswith("IDC_regular_ps50_idx5") and f.lower().endswith(('.png'))])
-        self.indexes.append(np.where([obj.label == 0 for obj in self.data])[0])
-        self.indexes.append(np.where([obj.label == 1 for obj in self.data])[0])
-        self.half_len = max([len(l) for l in self.indexes])
-
-
-    def __find_minority_class(self):
-        minority = None
-        ratio = len(self.indexes[0])/len(self.indexes[1])
-        if ratio < 1:
-            minority = 0
-        elif ratio > 1:
-            minority = 1
-        else:
-            print("Classes are already balanced")
-        return minority
-
-    def balance(self):
-        minority = self.__find_minority_class() 
-        if minority is not None:
-            balanced_indexes = []
-            for i in range(2):
-                if minority == i:
-                    balanced_indexes.append([])
-                    length = len(self.indexes[i])
-                    while length < self.half_len:
-                        balanced_indexes[i] += self.indexes[i][:min(length, self.half_len - length)].tolist()
-                        length = len(balanced_indexes[i])
-                    balanced_indexes[i] = np.array(balanced_indexes[i])
-                else:
-                    balanced_indexes.append(self.indexes[i])
-            self.indexes = balanced_indexes
-                   
-    @property 
-    def batch_size(self):
-        return 2 * self._batch_size
-         
-    @batch_size.setter
-    def batch_size(self, value):
-        if value % 2 > 0:
-            print(f"batch_size parameter must be odd, keeping curren value {self.batch_size}.")
-        else:
-            self._batch_size = value // 2
-
-    def sample(self, size, reverse=False, shuffle=False):
-        indexes = []
-        if isinstance(size, int):
-            output_size = min(size // 2, self.half_len)
-        elif isinstance(size, float):
-            output_size = int(size*self.half_len)
-        else:
-            return None
-        for labels in self.indexes:
-            indexes.append(self.__sample_label(labels,output_size, reverse, shuffle))
-        output = DataGenerator(self.zip_path)
-        output.indexes = indexes
-        output.half_len = output_size
-        return output
-
-    def __sample_label(self, labels, size, reverse, shuffle):
-        output = labels
-        if shuffle:
-            np.random.shuffle(output)
-        if reverse:
-            output = output[::-1]
-        return output[:min(size,len(output))]
-
-    def load_img(self, img_id):
-        data = self.data[img_id]
-        y = data.label
-        X = data.resized(self.dim)
-        return X,y
+    def train_test_split(self, test_size=0.2):
+        train_samples, val_samples = train_test_split(
+            self.samples,
+            test_size=test_size,
+            stratify=[label for _, label in self.samples],  # garder le ratio des classes
+            random_state=42
+        )
+        train_generator = DataGenerator()
+        train_generator.samples = train_samples
         
-    def __data_generation(self, indexes):
-        # Initialization
-        X = np.empty((self.batch_size, *self.dim, self.n_channels),dtype=np.uint8)
-        y = np.empty((self.batch_size), dtype=int)
-        # Generate data
-        for i, img_id in enumerate(indexes):
-
-            # Get image in array format and label
-            img, label = self.load_img(img_id)
-            
-            # Transform / augment data
-            img = random_transformations(img)
-            img = clahe(img)
-            
-            # Store sample
-            X[i,], y[i] = img, label
-
-        # Normalizarion
-        X = X / 255.
-            
-        return X, y
-
+        val_generator =  DataGenerator()
+        val_generator.samples = val_samples
+        return train_generator, val_generator
             
 __all__ = ["DataGenerator"]   
         

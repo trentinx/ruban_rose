@@ -29,10 +29,19 @@ class MedImage:
 
     @property
     def label(self):
-        return int(os.path.dirname(self.image_path).split('/')[-1])
+        return float(os.path.dirname(self.image_path).split('/')[-1])
 
     def resized(self, dim):
         return resize(self.array, dim)
+    
+    def histogram(self, layer):
+        array = self.array
+        if layer.lower() == "r":
+            return np.bincount(array[0,:,:].reshape(-1), minlength=256)
+        if layer.lower() == "g":
+            return np.bincount(array[:,0,:].reshape(-1), minlength=256)
+        if layer.lower() == "b":
+            return np.bincount(array[:,:,0].reshape(-1), minlength=256)
 
 def clahe(array):
     lab = cv2.cvtColor(array, cv2.COLOR_BGR2LAB)
