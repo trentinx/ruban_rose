@@ -22,54 +22,17 @@ Dependencies:
     - numpy, pandas (via dependencies)
 """
 
-from keras.applications import ResNet50
 from keras.backend import clear_session
-from keras.layers import Dense, Dropout, BatchNormalization
-from keras.models import Sequential
 from keras.optimizers import Adam, SGD
 from pinkribbon.callbacks import *
 from pinkribbon.dataset import DataGenerator
+from pinkribbon.models import build_model_resnet50_3 as build_model
 import gc
 import optuna
 
 
 NB_TRIALS = 20
 STUDY_NAME = "resnet50_3"
-
-def build_model(dropout_rate):
-    """
-    Construit un modèle de classification binaire basé sur ResNet50.
-    
-    Le modèle utilise ResNet50 pré-entraîné comme extracteur de caractéristiques
-    (couches gelées) suivi de couches denses personnalisées avec dropout et
-    normalisation par batch pour la classification binaire.
-    
-    Args:
-        dropout_rate (float): Taux de dropout à appliquer dans les couches.
-                             Le premier dropout utilise ce taux, le second
-                             utilise dropout_rate/2.
-    
-    Returns:
-        keras.Model: Modèle compilé prêt pour l'entraînement avec:
-                    - ResNet50 comme base (gelé)
-                    - Couches de classification personnalisées
-                    - Activation sigmoid pour classification binaire
-    """
-    resnet = ResNet50( include_top=False,
-                       weights="imagenet",
-                       pooling = "avg",
-                       name="resnet50")
-    resnet.trainable = False
-    
-    model = Sequential()
-    model.add(resnet)
-    model.add(BatchNormalization())
-    model.add(Dropout(dropout_rate))
-    model.add(Dense(128, activation='relu'))
-    model.add(BatchNormalization())
-    model.add(Dropout(dropout_rate/2))
-    model.add(Dense(1, activation='sigmoid'))
-    return model
 
 
 def launch_study(nb_trials, study_name):

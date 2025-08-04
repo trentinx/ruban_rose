@@ -21,6 +21,9 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import cv2
+import json
+from sklearn.metrics import (confusion_matrix, ConfusionMatrixDisplay,
+                            RocCurveDisplay, roc_auc_score)
 
 
 def plot_sample(dataloader, samples, selected_class, seed=None):
@@ -266,7 +269,112 @@ def plot_clahe(img_rgb, enhanced_img_rgb):
     plt.imshow(enhanced_img_rgb)
     plt.axis('off')
     plt.show()
+    
+def learning_curves(dataframe, index):
+    data = dataframe.iloc[index]
+    history = json.loads(data.history.replace("'",'"'))
+    recall = data.recall
+    loss = data.loss
 
+    train_recall = history["recall"]
+    val_recall = history["val_recall"]
+    
+    train_loss = history["loss"]
+    val_loss = history["val_loss"]
+
+    epochs = range(len(train_loss))
+    
+    
+    # Création du graphique
+    fig, ax1 = plt.subplots(figsize=(10, 6))
+    
+    # Axe pour la loss
+    ax1.set_xlabel('Epochs')
+    ax1.set_ylabel('Loss', color='blue')
+    ax1.plot(epochs, train_loss, label='Train Loss', color='blue', linestyle='-')
+    ax1.plot(epochs, val_loss, label='Validation Loss', color='blue', linestyle='--')
+    ax1.tick_params(axis='y', labelcolor='blue')
+    ax1.set_yticks(np.arange(0, 1.1, 0.1))
+    
+    
+    # Deuxième axe pour l'accuracy
+    ax2 = ax1.twinx()
+    ax2.set_ylabel('Recall', color='red')
+    ax2.plot(epochs, train_recall, label='Train Recall', color='red', linestyle='-')
+    ax2.plot(epochs, val_recall, label='Validation Recall', color='red', linestyle='--')
+    ax2.tick_params(axis='y', labelcolor='red')
+    ax2.set_yticks(np.arange(0, 1.1, 0.1))
+    
+    # Titre et légende
+    fig.suptitle('Courbe d\'apprentissage du modèle', fontsize=16)
+    fig.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=2)
+    fig.tight_layout()
+    plt.grid(True)
+    plt.show()
+
+
+def plot_loss_recall(dataframe,index,best_index):
+    data = dataframe.iloc[index]
+    history = json.loads(data.history.replace("'",'"'))
+    recall = data.recall
+    loss = data.loss
+    
+    data = dataframe.iloc[best_index]
+    best_recall = data.recall
+    best_loss = data.loss
+
+    val_recall = history["val_recall"]
+    
+    val_loss = history["val_loss"]
+
+    plt.figure(figsize=(8, 6))
+    plt.scatter(val_recall, val_loss, marker='o', color='purple', linestyle='-')
+    plt.axhline(loss, color='blue',linestyle=':')
+    plt.axvline(recall, color='red',linestyle=':')
+    plt.axhline(best_loss, color='grey',linestyle=':')
+    plt.axvline(best_recall, color='grey',linestyle=':')
+    plt.yticks(np.arange(0, 1.1, 0.1))
+    plt.xticks(np.arange(0, 1.1, 0.1))
+
+    
+    # Mise en forme
+    plt.xlabel('Validation Recall', color="red")
+    plt.ylabel('Validation Loss', color="blue")
+    plt.tick_params(axis='y', labelcolor='blue')
+    plt.tick_params(axis='x', labelcolor='red')
+    plt.title('Validation Loss en fonction du Recall')
+    plt.grid(True)
+    plt.tight_layout()
+    
+    plt.show()
+    
+
+
+def plot_confusion(y_true,y_pred,threshold=0.5):
+    # Calcul de la matrice
+    cm = confusion_matrix(y_true, y_pred>=threshold)
+
+    # Affichage sans colorbar
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm)
+    disp.plot(colorbar=False)
+
+    plt.title("Matrice de confusion")
+    plt.show()
+
+
+def plot_roc_auc(y_true,y_pred):
+    # Tracer directement la courbe ROC
+    disp = RocCurveDisplay.from_predictions(
+        y_true, y_pred,
+        #name=f"Resnet50_1 #5",
+        curve_kwargs={'color': 'blue'}
+    )
+
+    plt.plot([0, 1], [0, 1], 'k--', label='Aléatoire')
+    plt.title("Courbe ROC")
+    plt.grid(True)
+    plt.legend()
+    plt.show() 
 
 __all__ = [
     "plot_sample",
@@ -275,5 +383,10 @@ __all__ = [
     "get_mean_specter",
     "get_overlaped_mean_specter",
     "clahe_transform",
-    "plot_clahe"
+    "plot_clahe",
+    "learning_curves",
+    "plot_loss_recall",
+    "plot_confusion",
+    "plot_roc_aux"
+    
 ]
