@@ -1,11 +1,12 @@
-from PIL import Image, ImageOps, ImageEnhance
+from .images import MedImage
+from PIL import Image, ImageOps
 from keras.applications.resnet50 import preprocess_input
 from keras.utils import Sequence
 from sklearn.model_selection import train_test_split
 import io
 import numpy as np
-import random
 import zipfile
+import pandas as pd
 
 
 class DataGenerator(Sequence):
@@ -118,7 +119,48 @@ class DataGenerator(Sequence):
         val_generator =  DataGenerator()
         val_generator.samples = val_samples
         return train_generator, val_generator
+    
+    
+class ZipImageDataLoader():
+    def __init__(self, zip_path):
+        self.zfile = zipfile.ZipFile(zip_path, 'r')
+
+        # Liste des fichiers image avec leurs labels
+        self.image_files = [f for f in self.zfile.namelist() if not f.startswith("IDC_regular_ps50_idx5") and f.lower().endswith(('.png'))]
+
+        # Extraire les labels depuis les noms de dossier
+        self.classes = np.array([int(f.split('/')[-2]) for f in self.image_files])
+    
+    def __len__(self):
+        return len(self.image_files)
+    
+    def get_sample(self, sample_size, selected_class):
+        indexes = np.where(self.classes == selected_class)[0]
+        np.random.shuffle(indexes)
+        indexes = indexes[:sample_size]
+        images = [self.__getitem__(idx) for idx in indexes]
+        return dict(zip(indexes,images))
+    
+        
+    def __getitem__(self, idx):
+        image_path = self.image_files[idx]
+        label_name = image_path.split('/')[-2]
+        label = int(label_name)
+        return MedImage(image_path), label 
+    
+def build_pixels_dataframe(dataloader, max_nb_per_classe=1000):
+    columns = ["classe"] + [f"{c}_{i}" for c in ["r","g","b" ]for i in range(256)]
+    samples = []
+    for i in range(2):
+        for k,v  in dataloader.get_sample(max_nb_per_classe,i).items():
+            hist = np.concatenate((
+                np.atleast_1d(v[1]),
+                v[0].histogram("r"),
+                v[0].histogram("g"),
+                v[0].histogram("b")))
+            samples.append(hist)
+    return pd.DataFrame(np.array(samples),columns=columns)
             
-__all__ = ["DataGenerator"]   
+__all__ = ["DataGenerator","ZipImageDataLoader","build_pixels_dataframe"]   
         
         

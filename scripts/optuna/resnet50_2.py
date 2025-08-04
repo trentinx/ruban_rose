@@ -40,7 +40,7 @@ import optuna
 
 
 NB_TRIALS = 20
-STTUDY_NAME = "resnet50_2"
+STUDY_NAME = "resnet50_2"
 
 def build_model(dropout_rate):
     """
@@ -209,16 +209,16 @@ if __name__ == "__main__":
     study = optuna.create_study(
         directions=['maximize', 'minimize'],
         storage=storage,
-        study_name=STTUDY_NAME,
+        study_name=STUDY_NAME,
         load_if_exists=True,
         pruner=pruner
     )
     
 
     
-    print(f"Démarrage de l'optimisation avec l'étude: {STTUDY_NAME}")
+    print(f"Démarrage de l'optimisation avec l'étude: {STUDY_NAME}")
     print(f"Nombre d'essais prévus: {NB_TRIALS}")
     
-    launch_study(NB_TRIALS, STTUDY_NAME)
+    launch_study(NB_TRIALS, STUDY_NAME)
     
     print("Number of finished trials: {}".format(len(study.trials)))

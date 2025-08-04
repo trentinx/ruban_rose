@@ -22,54 +22,17 @@ Dependencies:
     - numpy, pandas (via dependencies)
 """
 
-from keras.applications import ResNet50
-from keras.backend import clear_session
-from keras.layers import Dense, Dropout, BatchNormalization
-from keras.models import Sequential
-from keras.optimizers import Adam, SGD
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import recall_score
 from pinkribbon.callbacks import *
-from pinkribbon.dataset import DataGenerator
+from pinkribbon.dataset import build_pixels_dataframe, ZipImageDataLoader
+from pinkribbon.images import MedImage
 import gc
 import optuna
 
 NB_TRIALS = 20
-STUDY_NAME = "resnet50_1"
-
-def build_model(dropout_rate):
-    """
-    Construit un modèle de classification binaire basé sur ResNet50.
-    
-    Le modèle utilise ResNet50 pré-entraîné comme extracteur de caractéristiques
-    (couches gelées) suivi de couches denses personnalisées avec dropout et
-    normalisation par batch pour la classification binaire.
-    
-    Args:
-        dropout_rate (float): Taux de dropout à appliquer dans les couches.
-                             Le premier dropout utilise ce taux, le second
-                             utilise dropout_rate/2.
-    
-    Returns:
-        keras.Model: Modèle compilé prêt pour l'entraînement avec:
-                    - ResNet50 comme base (gelé)
-                    - Couches de classification personnalisées
-                    - Activation sigmoid pour classification binaire
-    """
-    resnet = ResNet50( include_top=False,
-                       weights="imagenet",
-                       input_shape=(50,50,3),
-                       pooling = "avg",
-                       name="resnet50")
-    resnet.trainable = False
-    
-    model = Sequential()
-    model.add(resnet)
-    model.add(BatchNormalization())
-    model.add(Dropout(dropout_rate))
-    model.add(Dense(128, activation='relu'))
-    model.add(BatchNormalization())
-    model.add(Dropout(dropout_rate/2))
-    model.add(Dense(1, activation='sigmoid'))
-    return model
+STUDY_NAME = "random_forest" 
 
 
 def launch_study(nb_trials, study_name):
@@ -93,26 +56,26 @@ def launch_study(nb_trials, study_name):
         - Le générateur d'entraînement est mélangé
     """
     print("Initializing data generators ", end="")
-    generator = DataGenerator("data/BHI.zip", max_samples_per_class=1500, seed=42, experimentation=study_name)
-    train_generator, val_generator = generator.train_test_split(0.2)
-    del generator
-    val_generator.batch_size = 1
-    train_generator.shuffle = True
-    
-    print(f"Train data size : {len(train_generator) * train_generator.batch_size}")
-    print(f"Test data size : {len(val_generator) * val_generator.batch_size}")
+    dataloader = ZipImageDataLoader("data/BHI.zip")
+    MedImage.open_zfile("data/BHI.zip")
+    df = build_pixels_dataframe(dataloader,1500)
+    X = df.iloc[:,1:]
+    y  = df.iloc[:,0]
+    X_train, X_test, y_train, y_test = train_test_split(X,y,test_size=0.2,shuffle=True,random_state=42, stratify=y)
     
     study.optimize(lambda trial : 
                         objective(
                             trial, 
-                            train_generator = train_generator,
-                            val_generator = val_generator,
+                            X_train,
+                            X_test,
+                            y_train,
+                            y_test
                         ),
                         gc_after_trial=True, 
                         n_trials=nb_trials)
     
 
-def objective(trial, train_generator, val_generator):
+def objective(trial, X_train, X_test, y_train, y_test):
     """
     Fonction objectif pour l'optimisation Optuna multi-objectifs.
     
@@ -141,48 +104,29 @@ def objective(trial, train_generator, val_generator):
         optuna.exceptions.TrialPruned: Si l'essai est élagué par le callback de pruning.
     """
     
-    EPOCHS = 15  # Augmenté pour permettre plus d'apprentissage
     
-    lr = trial.suggest_float('lr', 1e-5, 1e-2, log=True)
-    batch_size = trial.suggest_categorical("batch_size", [16, 32, 64])
-    optimizer_name = trial.suggest_categorical("optimizer", ["Adam", "SGD"])
-    dropout_rate = trial.suggest_float("dropout_rate", 0.2, 0.5)
-    weight_decay = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
-    
-    if optimizer_name == "SGD":
-        momentum = trial.suggest_float("momentum", 0.8, 0.99)
-        optimizer = SGD(learning_rate=lr, momentum=momentum, weight_decay=weight_decay)
-    else:
-        optimizer = Adam(learning_rate=lr, weight_decay=weight_decay)
-        
-    train_generator.batch_size = batch_size
-    val_generator.batch_size = batch_size
+    n_estimators = trial.suggest_int('n_estimators',50, 1000)  # nombre d'arbres
+    max_depth = trial.suggest_int('max_depth',10,100)        # profondeur max des arbres
+    min_samples_split = trial.suggest_int('min_samples_split', 2, 10)        # nombre min d'échantillons pour splitter un noeud
+    min_samples_leaf = trial.suggest_int('min_samples_leaf', 1, 10)           # nombre min d'échantillons dans une feuille
+    max_features = trial.suggest_categorical('max_features', ['sqrt', 'log2'])
 
-    clear_session()
     gc.collect()
-    model = build_model(dropout_rate)
-    model.compile(optimizer=optimizer, loss='binary_crossentropy', metrics=["recall"])
-    
-    es = OptunaEarlyStopping()
-             
-    rp = OptunaReduceLROnPlateau()
-                 
-    pc = OptunaPruningCallback(trial, monitor='val_recall', mode='max')
+    model = RandomForestClassifier(n_estimators=n_estimators,
+                                   max_depth=max_depth,
+                                   min_samples_split=min_samples_split,
+                                   min_samples_leaf=min_samples_leaf,
+                                   max_features=max_features)
     
     try:
-        history = model.fit(
-            train_generator,
-            validation_data=val_generator,
-            epochs=EPOCHS,
-            verbose=1,
-            callbacks=[es, rp, pc]
-        )
+       model.fit(X_train, y_train)
+       y_pred = model.predict(X_test)
+       score = recall_score(y_test,y_pred)
+       
     except optuna.exceptions.TrialPruned:
         raise optuna.exceptions.TrialPruned()
 
-    trial.set_user_attr("history", history.history)
-    scores = model.evaluate(val_generator, verbose=0)
-    return scores[1], scores[0]
+    return score
 
 if __name__ == "__main__":   
     # Création d'un pruner MedianPruner
@@ -193,7 +137,7 @@ if __name__ == "__main__":
     )
     
     storage = optuna.storages.RDBStorage(
-    url='sqlite:///results/optuna.db',
+    url='sqlite:///results/optunarf.db',
     heartbeat_interval=60,
     grace_period=120,
     failed_trial_callback=optuna.storages.RetryFailedTrialCallback(max_retry=3),
@@ -201,7 +145,7 @@ if __name__ == "__main__":
     
     
     study = optuna.create_study(
-        directions=['maximize', 'minimize'],
+        direction='maximize',
         storage=storage,
         study_name=STUDY_NAME,
         load_if_exists=True,
